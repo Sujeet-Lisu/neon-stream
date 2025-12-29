@@ -217,7 +217,9 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
 // Admin Upload Endpoint
 app.post('/api/upload', authenticateToken, upload.fields([{ name: 'video', maxCount: 1 }, { name: 'poster', maxCount: 1 }]), async (req, res) => {
+  console.log("--> Received Upload Request");
   const { title, description, year } = req.body;
+  if(req.files) console.log(`Files received: Video=${req.files.video ? 'Yes' : 'No'}, Poster=${req.files.poster ? 'Yes' : 'No'}`);
   
   if (!req.files || !req.files.video) {
     return res.status(400).json({ error: "Missing video file" });
@@ -324,7 +326,8 @@ app.put('/api/movies/:id', authenticateToken, (req, res) => {
 
 // Global Error Handler
 app.use((err, req, res, next) => {
-  console.error("Unhandled Error:", err.stack);
+  console.error("!!! UNHANDLED ERROR !!!");
+  console.error(err.stack);
   res.status(500).json({ 
     error: "Internal Server Error", 
     message: process.env.NODE_ENV === 'development' ? err.message : undefined 

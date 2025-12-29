@@ -44,21 +44,16 @@ const Home = () => {
                     is_uploaded: true
                 };
             });
-
-            // Merge with mock movies: Give mock movies unique IDs if necessary or just use them
-            // To avoid key conflicts, we'll ensure IDs don't clash or use a prefix
-            const processedMock = mockMovies.map(m => ({...m, id: `mock-${m.id}`}));
-            
-            setMovies([...apiMovies, ...processedMock]);
+            setMovies(apiMovies);
             
             if (apiMovies.length > 0) {
                 setFeaturedMovie(apiMovies[0]); 
             } else {
-                 setFeaturedMovie(mockMovies[0]);
+                 setFeaturedMovie(null);
             }
         } catch (error) {
             console.error("Failed to fetch movies:", error);
-            setMovies(mockMovies);
+            setMovies([]); // No mock fallback for production debugging
         } finally {
             setLoading(false);
         }
@@ -123,7 +118,9 @@ const Home = () => {
                <div className="movie-row" id="row-2">
                   {loading
                     ? Array(6).fill(0).map((_, i) => <SkeletonCard key={i} />)
-                    : [...movies].reverse().map((movie, idx) => (
+                    : movies.length === 0
+                        ? <div style={{color: '#94a3b8', padding: '20px'}}>No new releases.</div>
+                        : [...movies].reverse().map((movie, idx) => (
                         <MovieCard key={`${movie.id}-new-${idx}`} movie={movie} />
                     ))
                   }
