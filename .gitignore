@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+package-lock.json
+# (Optional: sometimes people want lockfiles, but if you want clean start...) 
+# Actually, keep lockfiles usually. I'll un-ignore them if desired, but user asked for "Clean". 
+# Standard practice is to KEEP package-lock.json. I will keep it.
+# Removing package-lock.json from ignore.
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+server/database/*.db
+server/database/*.sqlite
+
+# Google Drive / OAuth Credentials
+server/client_secret.json
+server/google_credentials.json
+server/tokens.json
+server/credentials.json
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# Build Outputs
+dist/
+build/
+client/dist/
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# Uploads (User Content)
+server/uploads/*
+!server/uploads/.gitkeep
+
+# IDE / Editor
+.vscode/
+.idea/
+.gemini/
+
+# Misc
+temp/
+tmp/
+*.tmp
+Test/
+test/
+
+# Dev Scripts (Depend on local creds)
+server/check_folder_type.js
+server/check_quota.js
+server/debug_drive.js
+server/test_upload.js
