@@ -6,6 +6,7 @@ import SkeletonCard from '../components/SkeletonCard';
 import { PageTransition } from '../components/PageTransition';
 import { mockMovies } from '../data';
 import { ChevronRight, ChevronLeft } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 import '../index.css';
 
 const Home = () => {
@@ -16,7 +17,7 @@ const Home = () => {
   useEffect(() => {
     const fetchMovies = async () => {
         try {
-            const response = await fetch('http://localhost:5000/api/movies');
+            const response = await fetch(`${API_BASE_URL}/api/movies`);
             const result = await response.json();
             
                 // Transform API data to match MovieCard expected format
@@ -26,7 +27,7 @@ const Home = () => {
                 // Check if posterPath is valid and not a string like "null" or "undefined"
                 const hasPoster = posterPath && posterPath !== 'null' && posterPath !== 'undefined';
                 const imageUrl = hasPoster 
-                    ? `http://localhost:5000/uploads/${posterPath}` 
+                    ? `${API_BASE_URL}/uploads/${posterPath}` 
                     : 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&q=80&w=800'; // Fallback
 
                 return {

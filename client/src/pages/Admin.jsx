@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Navbar from '../components/Navbar';
 import { Upload, FileVideo, Image as ImageIcon, CheckCircle, AlertCircle, Cloud, Trash2, Edit2, X, Search, Plus, Film } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 import { PageTransition } from '../components/PageTransition';
 import '../index.css';
 
@@ -34,7 +35,7 @@ const Admin = () => {
   }, [isAuthenticated]);
 
   const checkDriveStatus = (token) => {
-    fetch('http://localhost:5000/api/drive/status', {
+    fetch(`${API_BASE_URL}/api/drive/status`, {
         headers: { 'Authorization': `Bearer ${token}` }
     })
     .then(res => res.json())
@@ -44,7 +45,7 @@ const Admin = () => {
 
   const fetchMovies = (token) => {
       const t = token || localStorage.getItem('admin_token');
-      fetch('http://localhost:5000/api/movies', {
+      fetch(`${API_BASE_URL}/api/movies`, {
         headers: { 'Authorization': `Bearer ${t}` }
       })
       .then(res => res.json())
@@ -55,7 +56,7 @@ const Admin = () => {
   const handleLogin = async (e) => {
       e.preventDefault();
       try {
-          const res = await fetch('http://localhost:5000/api/auth/login', {
+          const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ password })
@@ -101,7 +102,7 @@ const Admin = () => {
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
 
-    xhr.open('POST', 'http://localhost:5000/api/upload');
+    xhr.open('POST', `${API_BASE_URL}/api/upload`);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
     xhr.upload.onprogress = (event) => {
@@ -166,7 +167,7 @@ const Admin = () => {
       e.preventDefault();
       const token = localStorage.getItem('admin_token');
       try {
-          const res = await fetch(`http://localhost:5000/api/movies/${editingMovie.id}`, {
+          const res = await fetch(`${API_BASE_URL}/api/movies/${editingMovie.id}`, {
               method: 'PUT',
               headers: { 
                   'Content-Type': 'application/json',
@@ -192,7 +193,7 @@ const Admin = () => {
       const token = localStorage.getItem('admin_token');
       
       try {
-          const res = await fetch(`http://localhost:5000/api/movies/${deletingMovie.id}`, {
+          const res = await fetch(`${API_BASE_URL}/api/movies/${deletingMovie.id}`, {
               method: 'DELETE',
               headers: { 'Authorization': `Bearer ${token}` }
           });
@@ -243,7 +244,7 @@ const Admin = () => {
                 </div>
                 <div style={{display:'flex', gap:'10px'}}>
                     {!driveConnected && (
-                        <a href="http://localhost:5000/api/auth/google" target="_blank" className="btn-secondary">
+                        <a href={`${API_BASE_URL}/api/auth/google`} target="_blank" className="btn-secondary">
                             Connect Drive
                         </a>
                     )}
@@ -267,7 +268,7 @@ const Admin = () => {
                         {movies.map(movie => (
                             <div key={movie.id} className="movie-row glass-panel">
                                 <img 
-                                    src={movie.poster_path ? `http://localhost:5000/uploads/${movie.poster_path}` : 'https://via.placeholder.com/150'} 
+                                    src={movie.poster_path ? `${API_BASE_URL}/uploads/${movie.poster_path}` : 'https://via.placeholder.com/150'} 
                                     alt={movie.title} 
                                     className="row-poster"
                                 />

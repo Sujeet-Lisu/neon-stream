@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize, ArrowLeft, Loader } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, SkipBack, SkipForward } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 import { useNavigate } from 'react-router-dom';
 import '../index.css';
 

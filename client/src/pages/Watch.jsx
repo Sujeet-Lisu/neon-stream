@@ -2,7 +2,8 @@ import React from 'react';
 import { useParams } from 'react-router-dom';
 import VideoPlayer from '../components/VideoPlayer';
 import { mockMovies } from '../data';
-import { AlertCircle } from 'lucide-react';
+import { PageTransition } from '../components/PageTransition';
+import { API_BASE_URL } from '../config';
 import '../index.css';
 
 const Watch = () => {
@@ -38,7 +39,7 @@ const Watch = () => {
           
           // If not mock (or mock not found), try fetching from API
           try {
-              const response = await fetch(`http://localhost:5000/api/movies/${id}`);
+              const response = await fetch(`${API_BASE_URL}/api/movies/${id}`);
               if (!response.ok) throw new Error('Not found');
               
               const result = await response.json();
@@ -47,14 +48,14 @@ const Watch = () => {
                   setMovie({
                       title: m.title,
                       desc: m.description,
-                      hero: m.poster_path ? `http://localhost:5000/uploads/${m.poster_path}` : null,
+                      hero: m.poster_path ? `${API_BASE_URL}/uploads/${m.poster_path}` : null,
                   });
                   
                   // If it's a full URL (Drive), use it directly. Else use local stream API.
                   if (m.video_path && m.video_path.startsWith('http')) {
                       setVideoSrc(m.video_path);
                   } else {
-                      setVideoSrc(`http://localhost:5000/api/stream/${m.video_path}`);
+                      setVideoSrc(`${API_BASE_URL}/api/stream/${m.video_path}`);
                   }
               }
           } catch (e) {
