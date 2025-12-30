@@ -1,35 +1,27 @@
-const sqlite3 = require('sqlite3').verbose();
+const admin = require('firebase-admin');
 const path = require('path');
+const fs = require('fs');
 
-const DBSOURCE = path.join(__dirname, "movies.sqlite");
+const SERVICE_ACCOUNT_PATH = path.join(__dirname, '../firebase-service-account.json');
 
-const db = new sqlite3.Database(DBSOURCE, (err) => {
-  if (err) {
-    // Cannot open database
-    console.error(err.message);
-    throw err;
-  } else {
-    console.log('Connected to the SQLite database.');
-    db.run(`CREATE TABLE movies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            description TEXT,
-            poster_path TEXT,
-            video_path TEXT,
-            year TEXT,
-            views INTEGER DEFAULT 0,
-            date_added DATE DEFAULT CURRENT_DATE
-            )`,
-      (err) => {
-        if (err) {
-          // Table already created
-          console.log('Movies table already initialized.');
-        } else {
-          // Table just created, inserting some rows?
-          console.log('Movies table created.');
-        }
-      });
-  }
-});
+let db;
+
+try {
+    if (fs.existsSync(SERVICE_ACCOUNT_PATH)) {
+        const serviceAccount = require(SERVICE_ACCOUNT_PATH);
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        db = admin.firestore();
+        console.log("🔥 Firebase Firestore Connected");
+    } else {
+        console.error("❌ CRITICAL: firebase-service-account.json missing!");
+        console.error("   Please place the file in the 'server' folder.");
+        // Initialize with default creds for Render/Cloud if env var set (optional, but stick to file for now)
+        // db = null; // App will likely crash on usage, which is intended
+    }
+} catch (error) {
+    console.error("Firebase Init Error:", error);
+}
 
 module.exports = db;

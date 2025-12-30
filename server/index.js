@@ -60,44 +60,47 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // Get All Movies
-app.get('/api/movies', (req, res) => {
-  const sql = "SELECT * FROM movies ORDER BY id DESC";
-  db.all(sql, [], (err, rows) => {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
-    res.json({
-      message: "success",
-      data: rows
-    });
-  });
+app.get('/api/movies', async (req, res) => {
+  try {
+      if (!db) return res.json({ message: "success", data: [] }); // Fallback if no DB
+      const snapshot = await db.collection('movies').orderBy('date_added', 'desc').get();
+      const movies = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      res.json({
+          message: "success",
+          data: movies
+      });
+  } catch (err) {
+      res.status(500).json({ error: err.message });
+  }
 });
 
 // Get Single Movie
-app.get('/api/movies/:id', (req, res) => {
-  const sql = "SELECT * FROM movies WHERE id = ?";
-  const params = [req.params.id];
-  db.get(sql, params, (err, row) => {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
-    res.json({
-      message: "success",
-      data: row
-    });
-  });
+app.get('/api/movies/:id', async (req, res) => {
+  try {
+      if (!db) return res.status(500).json({ error: "DB not connected" });
+      const doc = await db.collection('movies').doc(req.params.id).get();
+      if (!doc.exists) return res.status(404).json({ error: "Movie not found" });
+      res.json({
+          message: "success",
+          data: { id: doc.id, ...doc.data() }
+      });
+  } catch (err) {
+      res.status(500).json({ error: err.message });
+  }
 });
 
 // Increment View Count
-app.post('/api/movies/:id/view', (req, res) => {
-    const sql = "UPDATE movies SET views = views + 1 WHERE id = ?";
-    const params = [req.params.id];
-    db.run(sql, params, function(err) {
-        if (err) {
-            return res.status(400).json({ error: err.message });
-        }
-        res.json({ message: "View counted", changes: this.changes });
-    });
+app.post('/api/movies/:id/view', async (req, res) => {
+    try {
+        if (!db) return res.status(500).json({ error: "DB not connected" });
+        const admin = require('firebase-admin');
+        await db.collection('movies').doc(req.params.id).update({
+            views: admin.firestore.FieldValue.increment(1)
+        });
+        res.json({ message: "View counted" });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
 });
 
 // Video Streaming Endpoint
@@ -255,73 +258,76 @@ app.post('/api/upload', authenticateToken, upload.fields([{ name: 'video', maxCo
   // Auto-generate thumbnail if no poster (Optional: risky if video deleted, skipping for safer MVP or assuming user provides poster)
   // Logic: For Drive uploads, generating thumbnails from local file *before* delete is possible but complexity. 
   // For MVP SaaS, let's require poster or use default.
+  // Auto-generate thumbnail if no poster
   if (!posterFilename) {
       posterFilename = 'default-poster.jpg';
   }
 
-  const sql = "INSERT INTO movies (title, description, poster_path, video_path, year) VALUES (?, ?, ?, ?, ?)";
-  // Store the Drive Link in video_path
-  const params = [title, description, posterFilename, videoDriveLink, year || '2025'];
+  // 3. Save to Firestore
+  try {
+      const newMovie = {
+          title,
+          description,
+          poster_path: posterFilename,
+          video_path: videoDriveLink,
+          year: year || '2025',
+          views: 0,
+          date_added: new Date().toISOString()
+      };
 
-  db.run(sql, params, function (err) {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    res.json({
-      message: "Movie uploaded and processed successfully",
-      id: this.lastID,
-      data: {
-        title,
-        video: videoDriveLink,
-        poster: posterFilename
-      }
-    });
-  });
+      const docRef = await db.collection('movies').add(newMovie);
+      
+      res.json({
+          message: "Movie uploaded and processed successfully",
+          id: docRef.id,
+          data: newMovie
+      });
+  } catch (err) {
+      return res.status(500).json({ error: "DB Error: " + err.message });
+  }
 });
 
 // Admin Delete Movie
-app.delete('/api/movies/:id', authenticateToken, (req, res) => {
+app.delete('/api/movies/:id', authenticateToken, async (req, res) => {
     const id = req.params.id;
     
-    // 1. Get Movie details to find Drive ID
-    db.get("SELECT video_path, poster_path FROM movies WHERE id = ?", [id], async (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (!row) return res.status(404).json({ error: "Movie not found" });
+    try {
+        // 1. Get Movie details to find Drive ID
+        const doc = await db.collection('movies').doc(id).get();
+        if (!doc.exists) return res.status(404).json({ error: "Movie not found" });
+        const movie = doc.data();
 
-        try {
-            // 2. Delete from Drive if it's a Drive link
-            if (row.video_path && row.video_path.includes('drive.google.com')) {
-                const fileId = row.video_path.match(/[-\w]{25,}/)?.[0];
-                if (fileId) {
-                    await deleteFromDrive(fileId);
-                }
+        // 2. Delete from Drive if it's a Drive link
+        if (movie.video_path && movie.video_path.includes('drive.google.com')) {
+            const fileId = movie.video_path.match(/[-\w]{25,}/)?.[0];
+            if (fileId) {
+                await deleteFromDrive(fileId);
             }
-
-            // 3. Delete from DB
-            db.run("DELETE FROM movies WHERE id = ?", [id], function(err) {
-                if (err) return res.status(500).json({ error: err.message });
-                res.json({ message: "Movie deleted successfully" });
-            });
-
-        } catch (e) {
-            console.error("Delete Error:", e);
-            res.status(500).json({ error: "Failed to delete from Drive" });
         }
-    });
+
+        // 3. Delete from DB
+        await db.collection('movies').doc(id).delete();
+        res.json({ message: "Movie deleted successfully" });
+
+    } catch (e) {
+        console.error("Delete Error:", e);
+        res.status(500).json({ error: "Failed to delete: " + e.message });
+    }
 });
 
-// Admin Update Movie (Metadata only for now)
-app.put('/api/movies/:id', authenticateToken, (req, res) => {
+// Admin Update Movie (Metadata only)
+app.put('/api/movies/:id', authenticateToken, async (req, res) => {
     const { title, description, year } = req.body;
     const id = req.params.id;
 
-    const sql = "UPDATE movies SET title = ?, description = ?, year = ? WHERE id = ?";
-    const params = [title, description, year, id];
-
-    db.run(sql, params, function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: "Movie updated successfully", changes: this.changes });
-    });
+    try {
+        await db.collection('movies').doc(id).update({
+            title, description, year
+        });
+        res.json({ message: "Movie updated successfully" });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
 });
 
 // Global Error Handler
