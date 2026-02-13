@@ -1,142 +1,95 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Settings, SkipBack, SkipForward } from 'lucide-react';
-import { API_BASE_URL } from '../config';
+import { Play, Pause, Volume2, VolumeX, Maximize, ArrowLeft, Loader } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import '../index.css';
+import { API_URL } from '../config';
 
 const VideoPlayer = ({ src, poster }) => {
-  const videoRef = useRef(null);
-  const navigate = useNavigate();
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [progress, setProgress] = useState(0);
+  const [showControls, setShowControls] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(1);
-  const [showControls, setShowControls] = useState(true);
-  const [isLoading, setIsLoading] = useState(!src.includes('drive.google.com')); // Skip loading state for Drive to avoid infinite spinner
+  const videoRef = useRef(null);
+  const controlsTimeoutRef = useRef(null);
 
-  // Auto-hide controls
+  const togglePlay = () => {
+    if (videoRef.current) {
+      if (isPlaying) {
+        videoRef.current.pause();
+      } else {
+        videoRef.current.play();
+      }
+      setIsPlaying(!isPlaying);
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (videoRef.current) {
+      const current = videoRef.current.currentTime;
+      const duration = videoRef.current.duration;
+      setProgress((current / duration) * 100);
+    }
+  };
+
+  const handleSeek = (e) => {
+    if (videoRef.current) {
+      const progressBar = e.currentTarget;
+      const newTime = (e.nativeEvent.offsetX / progressBar.offsetWidth) * videoRef.current.duration;
+      videoRef.current.currentTime = newTime;
+    }
+  };
+
+  const toggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !isMuted;
+      setIsMuted(!isMuted);
+    }
+  };
+
+  const handleVolumeChange = (e) => {
+    const newVolume = parseFloat(e.target.value);
+    if (videoRef.current) {
+      videoRef.current.volume = newVolume;
+      setVolume(newVolume);
+      setIsMuted(newVolume === 0);
+    }
+  };
+
   useEffect(() => {
-    let timeout;
     const handleMouseMove = () => {
       setShowControls(true);
-      clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        if (isPlaying && !isLoading) setShowControls(false);
+      if (controlsTimeoutRef.current) {
+        clearTimeout(controlsTimeoutRef.current);
+      }
+      controlsTimeoutRef.current = setTimeout(() => {
+        if (isPlaying) setShowControls(false);
       }, 3000);
     };
 
     window.addEventListener('mousemove', handleMouseMove);
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
-      clearTimeout(timeout);
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     };
-  }, [isPlaying, isLoading]);
-
-  const togglePlay = () => {
-    if (videoRef.current.paused) {
-      videoRef.current.play();
-      setIsPlaying(true);
-    } else {
-      videoRef.current.pause();
-      setIsPlaying(false);
-    }
-  };
-
-  const handleTimeUpdate = () => {
-    const current = videoRef.current.currentTime;
-    const duration = videoRef.current.duration;
-    setProgress((current / duration) * 100);
-  };
-
-  const handleSeek = (e) => {
-    const width = e.currentTarget.clientWidth;
-    const clickX = e.nativeEvent.offsetX;
-    const duration = videoRef.current.duration;
-    videoRef.current.currentTime = (clickX / width) * duration;
-  };
-
-  const handleVolumeChange = (e) => {
-    const newVolume = parseFloat(e.target.value);
-    setVolume(newVolume);
-    videoRef.current.volume = newVolume;
-    setIsMuted(newVolume === 0);
-  };
-
-  const toggleMute = () => {
-    const newMutedState = !isMuted;
-    setIsMuted(newMutedState);
-    videoRef.current.muted = newMutedState;
-    if (newMutedState) setVolume(0);
-    else setVolume(1);
-  };
-
-  /* Keyboard Controls */
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-        if (!showControls && !isPlaying) return; // Don't capture if completely idle/hidden context unless we want global keys
-        
-        switch(e.code) {
-            case 'Space':
-                e.preventDefault();
-                togglePlay();
-                break;
-            case 'ArrowLeft':
-                e.preventDefault();
-                videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 5);
-                break;
-            case 'ArrowRight':
-                e.preventDefault();
-                videoRef.current.currentTime = Math.min(videoRef.current.duration, videoRef.current.currentTime + 5);
-                break;
-            case 'ArrowUp':
-                e.preventDefault();
-                setVolume(v => {
-                    const newV = Math.min(1, v + 0.1);
-                    videoRef.current.volume = newV;
-                    setIsMuted(newV === 0);
-                    return newV;
-                });
-                break;
-            case 'ArrowDown':
-                e.preventDefault();
-                setVolume(v => {
-                    const newV = Math.max(0, v - 0.1);
-                    videoRef.current.volume = newV;
-                    setIsMuted(newV === 0);
-                    return newV;
-                });
-                break;
-            case 'KeyM':
-                toggleMute();
-                break;
-            case 'KeyF':
-                toggleFullscreen();
-                break;
-        }
-        setShowControls(true); // Show controls on key interaction
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, showControls]); // Dependencies for keeping state fresh if needed
-
+  }, [isPlaying]);
   /* View Counting Logic */
   const hasCountedView = useRef(false);
   useEffect(() => {
       // Only count view once per session when playing starts
       if (isPlaying && !hasCountedView.current) {
-          // Assume ID is passed or derived. Since we only have src/poster props here, 
-          // we might need to pass the ID prop.
-          // However, for this MVP we can parse the URL or just skip if no ID is available.
-          // Ideally VideoPlayer should accept `movieId` prop.
-          // Let's see if we can extract it from the URL since we are on /watch/:id
-          const pathSegments = window.location.pathname.split('/');
-          const possibleId = pathSegments[pathSegments.indexOf('watch') + 1];
-          
-          if (possibleId && !possibleId.startsWith('mock-')) {
-             fetch(`http://localhost:5000/api/movies/${possibleId}/view`, { method: 'POST' })
-             .catch(err => console.error("View count error", err));
-             hasCountedView.current = true;
+          try {
+            const pathSegments = window.location.pathname.split('/');
+            const possibleId = pathSegments[pathSegments.indexOf('watch') + 1];
+            
+            if (possibleId && !possibleId.startsWith('mock-') && API_URL) {
+               fetch(`${API_URL}/api/movies/${possibleId}/view`, { method: 'POST' })
+               .catch(err => console.warn("View count error", err));
+               hasCountedView.current = true;
+            }
+          } catch(e) {
+            console.warn("View count logic failed", e);
           }
       }
   }, [isPlaying]);
@@ -168,11 +121,12 @@ const VideoPlayer = ({ src, poster }) => {
       return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
   };
 
+  if (!src) return <div className="player-error">No Video Source</div>;
+
   return (
     <div className="player-wrapper">
-      <div className={`back-btn ${showControls ? 'visible' : 'hidden'}`} onClick={() => navigate(-1)}>
-        <ArrowLeft size={30} />
-      </div>
+      {/* Back button is now handled by parent Watch component */}
+
 
       {isLoading && !src.includes('drive.google.com') && (
         <div className="loading-overlay">
@@ -183,7 +137,7 @@ const VideoPlayer = ({ src, poster }) => {
       {src.includes('drive.google.com') ? (
         <>
          <iframe 
-            src={`https://drive.google.com/file/d/${src.match(/[-\w]{25,}/)?.[0] || ""}/preview`}
+            src={src.includes('/preview') ? src : `https://drive.google.com/file/d/${src.match(/[-\w]{25,}/)?.[0] || ""}/preview`}
             className="video-element" 
             allow="autoplay; encrypted-media; fullscreen"
             allowFullScreen

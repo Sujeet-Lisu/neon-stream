@@ -1,76 +1,95 @@
 const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
-const db = require('../database/db'); // Firestore
+const db = require('../database/db'); // Import DB for token persistence
 
-// Paths
-const CREDENTIALS_PATH = path.join(__dirname, '../client_secret.json');
-
-// Scopes required for uploading
+// Internal State
+let oAuth2Client = null;
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 
-// Load Credentials
-let oAuth2Client = null;
-let isConnectedState = false;
-
+/**
+ * Initialize OAuth Client using Environment Variables
+ */
 const initClient = async () => {
-  if (fs.existsSync(CREDENTIALS_PATH)) {
-    const content = fs.readFileSync(CREDENTIALS_PATH);
-    const credentials = JSON.parse(content);
+  try {
+    // 1. Load Credentials (Env Var > File)
+    let credentials;
+    if (process.env.GOOGLE_CREDENTIALS) {
+        credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+    } else {
+        // Fallback for local dev (if file still exists)
+        const credPath = path.join(__dirname, '../client_secret.json');
+        if (fs.existsSync(credPath)) {
+            credentials = JSON.parse(fs.readFileSync(credPath));
+        }
+    }
+
+    if (!credentials) {
+        console.error("⚠️ Drive Service: Google Credentials not found (Env: GOOGLE_CREDENTIALS or file). Drive features disabled.");
+        return;
+    }
+
     const { client_secret, client_id, redirect_uris } = credentials.web;
     oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+
+    // 2. Load Token from DB (Persistent)
+    const { rows } = await db.query("SELECT value FROM settings WHERE key = $1", ['drive_token']);
     
-    // Load Token from Firestore
-    if (db) {
-        try {
-            const doc = await db.collection('config').doc('drive_auth').get();
-            if (doc.exists) {
-                const tokens = doc.data();
-                oAuth2Client.setCredentials(tokens);
-                isConnectedState = true;
-                console.log('OAuth2 Client Initialized with Token (from Firestore).');
-            } else {
-                console.log('OAuth2 Client Initialized (No Token in Firestore).');
-            }
-        } catch (e) {
-            console.error("Failed to load tokens from component:", e);
-        }
+    if (rows.length > 0) {
+        const token = JSON.parse(rows[0].value);
+        oAuth2Client.setCredentials(token);
+        console.log('✅ Drive Service: OAuth2 Client Initialized (Token loaded from DB).');
     } else {
-        console.log("DB not ready, skipping token load.");
+        // Fallback: Check local file for backward compatibility/initial migration
+        const tokenPath = path.join(__dirname, '../tokens.json');
+        if (fs.existsSync(tokenPath)) {
+            const tokenStr = fs.readFileSync(tokenPath, 'utf8');
+            const token = JSON.parse(tokenStr);
+            oAuth2Client.setCredentials(token);
+            
+            // Migrate to DB
+            await db.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2", ['drive_token', tokenStr]);
+            console.log('✅ Drive Service: Token migrated from file to DB.');
+        } else {
+            console.log('⚠️ Drive Service: OAuth2 Client Initialized (No Token found). Please Authenticate.');
+        }
     }
-  } else {
-    console.error("CRITICAL: client_secret.json not found!");
+
+  } catch (err) {
+      console.error("❌ Drive Service Init Error:", err.message);
   }
 };
 
+// Trigger initialization
+initClient();
+
 // Generate Auth URL
 const getAuthUrl = () => {
-    if (!oAuth2Client) throw new Error("OAuth Client not initialized (missing client_secret.json)");
+    if (!oAuth2Client) throw new Error("OAuth Client not initialized (Missing Credentials)");
     return oAuth2Client.generateAuthUrl({
         access_type: 'offline', // Critical for refresh token
         scope: SCOPES,
     });
 };
 
-// Exchange Code for Token and Persist to DB
+// Exchange Code for Token & Save to DB
 const saveToken = async (code) => {
+    if (!oAuth2Client) throw new Error("OAuth Client not initialized");
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
     
-    if (db) {
-        await db.collection('config').doc('drive_auth').set(tokens);
-        console.log('Tokens saved to Firestore');
-        isConnectedState = true;
-    } else {
-        console.error("DB not connected, cannot save tokens!");
-    }
+    // Save to DB
+    const tokenStr = JSON.stringify(tokens);
+    await db.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2", ['drive_token', tokenStr]);
     
+    console.log('✅ Token saved to Database.');
     return tokens;
 };
 
 // Check if authenticated
 const isConnected = () => {
-    return !!oAuth2Client && isConnectedState;
+    // Basic check: do we have credentials set?
+    return !!oAuth2Client && !!oAuth2Client.credentials && !!oAuth2Client.credentials.access_token;
 };
 
 /**
@@ -115,7 +134,11 @@ async function uploadToDrive(filePath, fileName, mimeType, folderId = null) {
     return response.data.webViewLink;
 
   } catch (error) {
-    console.error('Drive API Error:', error);
+    if (error.code === 401 || (error.response && error.response.status === 401)) {
+        console.error("Drive Token Expired/Invalid.");
+        throw new Error("Drive Token Expired. Please Re-connect in Admin Panel.");
+    }
+    console.error('Drive Upload Error:', error);
     throw error;
   }
 }
@@ -133,19 +156,32 @@ async function deleteFromDrive(fileId) {
         await drive.files.delete({ fileId: fileId });
         console.log(`Deleted Drive File: ${fileId}`);
     } catch (error) {
+        if (error.code === 404 || error.code === 400 || 
+            (error.response && (error.response.status === 404 || error.response.status === 400))) {
+            return; // Treat as success
+        }
         console.error('Drive Delete Error:', error);
         throw error;
     }
 }
 
-// Initialize on require, but wait for DB connection implicitly
-// We might want to call initClient explicitly in index.js, but keeping it simple:
-setTimeout(initClient, 2000); // Give DB a moment to connect
+async function validateConnection() {
+    if (!isConnected()) return false;
+    const drive = google.drive({ version: 'v3', auth: oAuth2Client });
+    try {
+        await drive.about.get({ fields: 'user' });
+        return true;
+    } catch (error) {
+        console.error("Drive Validation Failed:", error.message);
+        return false;
+    }
+}
 
 module.exports = { 
     uploadToDrive, 
     deleteFromDrive,
     getAuthUrl, 
-    saveToken,
-    isConnected
+    saveToken, 
+    isConnected,
+    validateConnection
 };

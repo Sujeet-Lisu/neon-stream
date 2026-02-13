@@ -2,8 +2,8 @@ import React from 'react';
 import { useParams } from 'react-router-dom';
 import VideoPlayer from '../components/VideoPlayer';
 import { mockMovies } from '../data';
-import { PageTransition } from '../components/PageTransition';
-import { API_BASE_URL } from '../config';
+import { AlertCircle, ArrowLeft } from 'lucide-react';
+import { API_URL } from '../config';
 import '../index.css';
 
 const Watch = () => {
@@ -39,7 +39,7 @@ const Watch = () => {
           
           // If not mock (or mock not found), try fetching from API
           try {
-              const response = await fetch(`${API_BASE_URL}/api/movies/${id}`);
+              const response = await fetch(`${API_URL}/api/movies/${id}`);
               if (!response.ok) throw new Error('Not found');
               
               const result = await response.json();
@@ -48,14 +48,14 @@ const Watch = () => {
                   setMovie({
                       title: m.title,
                       desc: m.description,
-                      hero: m.poster_path ? `${API_BASE_URL}/uploads/${m.poster_path}` : null,
+                      hero: m.poster_path ? `${API_URL}/uploads/${m.poster_path}` : null,
                   });
                   
                   // If it's a full URL (Drive), use it directly. Else use local stream API.
                   if (m.video_path && m.video_path.startsWith('http')) {
                       setVideoSrc(m.video_path);
                   } else {
-                      setVideoSrc(`${API_BASE_URL}/api/stream/${m.video_path}`);
+                      setVideoSrc(`${API_URL}/api/stream/${m.video_path}`);
                   }
               }
           } catch (e) {
@@ -71,11 +71,30 @@ const Watch = () => {
 
   return (
     <div className="watch-container">
-      <VideoPlayer src={videoSrc} poster={movie.hero} />
-      
-      {/* Optional: Add "You are watching" overlay or similar below if not fullscreen */}
-      {/* However, the VideoPlayer component currently takes up 100vh. */}
-      {/* We can overlay a title temporarily */}
+      {/* 
+        Independent Back Button:
+        Placed here so it exists even if VideoPlayer fails/crashes.
+      */}
+      <div 
+        className="watch-back-btn" 
+        onClick={() => {
+            // Try to go back, else home
+            if (window.history.length > 1) window.history.back();
+            else window.location.href = '/'; 
+        }}
+      >
+        <ArrowLeft size={30} />
+      </div>
+
+      {(!movie || !videoSrc) ? (
+          <div className="loading-state">
+             <AlertCircle size={48} color="#ef4444" />
+             <p>Video not found or loading...</p>
+             <button onClick={() => window.location.href='/'} style={{marginTop: 20, padding: '10px 20px'}}>Go Home</button>
+          </div>
+      ) : (
+          <VideoPlayer src={videoSrc} poster={movie.hero} />
+      )}
       
       <div className="watch-meta-overlay">
          {movie && <h3>{movie.title}</h3>}
@@ -89,10 +108,41 @@ const Watch = () => {
             position: relative;
         }
         
+        .watch-back-btn {
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            z-index: 9999; /* Higher than anything in player */
+            color: white;
+            cursor: pointer;
+            background: rgba(0,0,0,0.5);
+            width: 50px; height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+        
+        .watch-back-btn:hover {
+            background: white;
+            color: black;
+            transform: scale(1.1);
+        }
+
+        .loading-state {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+
         .watch-meta-overlay {
             position: absolute;
             top: 20px;
-            left: 80px; /* Right of back button */
+            left: 100px;
             color: white;
             z-index: var(--z-raised);
             opacity: 0;
@@ -112,5 +162,6 @@ const Watch = () => {
     </div>
   );
 };
+
 
 export default Watch;

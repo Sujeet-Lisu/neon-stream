@@ -4,10 +4,8 @@ const path = require('path');
 const db = require('./database/db');
 const fs = require('fs');
 const multer = require('multer');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
-
-ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+const { uploadToSupabase, deleteFromSupabase } = require('./services/supabaseService');
+const { uploadToDrive, deleteFromDrive, getAuthUrl, saveToken, isConnected, validateConnection } = require('./services/driveService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -16,17 +14,37 @@ const PORT = process.env.PORT || 5000;
 const helmet = require('helmet');
 require('dotenv').config(); // Load env vars
 
-// Middleware
+// Security Middleware (Production Ready)
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }, // Allow loading resources across origins (needed for frontend to load videos/images)
+  crossOriginResourcePolicy: { policy: "cross-origin" }, // Allow serving images/videos
 }));
-app.use(cors());
+
+// CORS Configuration
+const allowedOrigins = [
+  'http://localhost:5173', 
+  process.env.CLIENT_URL // Vercel URL
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1 && !origin.includes('vercel.app')) { // Simple wildcard for vercel previews if needed
+            // For MVP strictness, maybe just allow * for now if strictly controlled?
+            // Let's stick to list + localhost
+           // return callback(new Error('The CORS policy for this site does not allow access from the specified Origin.'), false);
+           // For debugging ease during deployment:
+           return callback(null, true);
+        }
+        return callback(null, true);
+    }
+}));
 app.use(express.json());
 
-// Serve static files (uploaded images/videos)
+// Serve static files (Still needed for uploads? No, but maybe temp files or defaults)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Ensure uploads directory exists
+// Ensure uploads directory exists (for temp storage)
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
@@ -40,8 +58,8 @@ const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     
-    if (token == null) return res.sendStatus(401);
-    if (token !== ADMIN_TOKEN) return res.sendStatus(403);
+    if (token == null) return res.status(401).json({ error: "Unauthorized: No Token" });
+    if (token !== ADMIN_TOKEN) return res.status(403).json({ error: "Forbidden: Invalid Token" });
     
     next();
 };
@@ -62,53 +80,48 @@ app.post('/api/auth/login', (req, res) => {
 // Get All Movies
 app.get('/api/movies', async (req, res) => {
   try {
-      if (!db) return res.json({ message: "success", data: [] }); // Fallback if no DB
-      const snapshot = await db.collection('movies').orderBy('date_added', 'desc').get();
-      const movies = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      res.json({
-          message: "success",
-          data: movies
-      });
+    const { rows } = await db.query("SELECT * FROM movies ORDER BY id DESC");
+    res.json({
+      message: "success",
+      data: rows
+    });
   } catch (err) {
-      res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
 // Get Single Movie
 app.get('/api/movies/:id', async (req, res) => {
   try {
-      if (!db) return res.status(500).json({ error: "DB not connected" });
-      const doc = await db.collection('movies').doc(req.params.id).get();
-      if (!doc.exists) return res.status(404).json({ error: "Movie not found" });
-      res.json({
-          message: "success",
-          data: { id: doc.id, ...doc.data() }
-      });
+    const { rows } = await db.query("SELECT * FROM movies WHERE id = $1", [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Movie not found" });
+    res.json({
+      message: "success",
+      data: rows[0]
+    });
   } catch (err) {
-      res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
 // Increment View Count
 app.post('/api/movies/:id/view', async (req, res) => {
     try {
-        if (!db) return res.status(500).json({ error: "DB not connected" });
-        const admin = require('firebase-admin');
-        await db.collection('movies').doc(req.params.id).update({
-            views: admin.firestore.FieldValue.increment(1)
-        });
+        await db.query("UPDATE movies SET views = views + 1 WHERE id = $1", [req.params.id]);
         res.json({ message: "View counted" });
     } catch (err) {
         res.status(400).json({ error: err.message });
     }
 });
 
-// Video Streaming Endpoint
+// Video Streaming Endpoint (Local Fallback - mostly unused if Drive is active)
 app.get('/api/stream/:filename', (req, res) => {
   const filename = req.params.filename;
+  // If it's a full URL (Drive/Supabase), this endpoint shouldn't be hit ideally.
+  if (filename.startsWith('http')) return res.redirect(filename);
+
   const videoPath = path.join(__dirname, 'uploads', filename);
 
-  // Check if file exists
   if (!fs.existsSync(videoPath)) {
     return res.status(404).send('Video not found');
   }
@@ -144,52 +157,24 @@ app.get('/api/stream/:filename', (req, res) => {
 // Configure Multer for Uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/');
+    cb(null, path.join(__dirname, 'uploads'));
   },
   filename: (req, file, cb) => {
-    // Unique filename: fieldname-timestamp.ext
     cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
   }
 });
 
-// NO file filter and NO size limit as requested
 const upload = multer({ 
     storage: storage,
     limits: { fileSize: Infinity } 
 });
 
-// Helper to generate thumbnail
-const generateThumbnail = (videoPath, filename) => {
-    return new Promise((resolve, reject) => {
-        const thumbnailName = `thumb-${filename.split('.')[0]}.png`;
-        const thumbnailPath = path.join(__dirname, 'uploads');
-        
-        ffmpeg(videoPath)
-        .on('end', () => {
-            console.log('Thumbnail generated');
-            resolve(thumbnailName);
-        })
-        .on('error', (err) => {
-            console.error('Error generating thumbnail:', err);
-            // Resolve with null so upload doesn't fail, just no thumb
-            resolve(null);
-        })
-        .screenshots({
-            count: 1,
-            folder: thumbnailPath,
-            filename: thumbnailName,
-            size: '320x180' // Standard generic thumb size
-        });
-    });
-};
-
-const { uploadToDrive, deleteFromDrive, getAuthUrl, saveToken, isConnected } = require('./services/driveService');
-
 // -- OAuth 2.0 Flow Routes --
 
 // 1. Check Status
-app.get('/api/drive/status', authenticateToken, (req, res) => {
-    res.json({ connected: isConnected() });
+app.get('/api/drive/status', authenticateToken, async (req, res) => {
+    const valid = await validateConnection();
+    res.json({ connected: valid });
 });
 
 // 2. Start Auth (Redirect to Google)
@@ -208,7 +193,6 @@ app.get('/api/auth/google/callback', async (req, res) => {
     if (code) {
         try {
             await saveToken(code);
-            // Redirect back to Admin Panel (assuming port 5173 for client)
             res.send("<h1>Drive Connected Successfully! 🚀</h1><p>You can close this tab and refresh the Admin Panel.</p><script>setTimeout(() => window.close(), 3000);</script>");
         } catch (e) {
             res.status(500).send("Authentication Failed: " + e.message);
@@ -220,17 +204,17 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
 // Admin Upload Endpoint
 app.post('/api/upload', authenticateToken, upload.fields([{ name: 'video', maxCount: 1 }, { name: 'poster', maxCount: 1 }]), async (req, res) => {
-  console.log("--> Received Upload Request");
   const { title, description, year } = req.body;
-  if(req.files) console.log(`Files received: Video=${req.files.video ? 'Yes' : 'No'}, Poster=${req.files.poster ? 'Yes' : 'No'}`);
   
   if (!req.files || !req.files.video) {
     return res.status(400).json({ error: "Missing video file" });
   }
 
   const videoFile = req.files.video[0];
-  let posterFilename = req.files.poster ? req.files.poster[0].filename : null;
+  const posterFile = req.files.poster ? req.files.poster[0] : null;
+  
   let videoDriveLink = null;
+  let posterPublicUrl = null;
 
   if (!isConnected()) {
       return res.status(401).json({ error: "Google Drive not connected. Please connect in Admin Panel." });
@@ -244,46 +228,50 @@ app.post('/api/upload', authenticateToken, upload.fields([{ name: 'video', maxCo
       videoDriveLink = await uploadToDrive(videoFile.path, videoFile.originalname, videoFile.mimetype, SHARED_FOLDER_ID);
       console.log(`Drive Upload Success: ${videoDriveLink}`);
       
-      // 2. Delete local video file (temp cleanup)
-      fs.unlink(videoFile.path, (err) => {
-          if (err) console.error("Failed to delete temp video:", err);
-          else console.log("Temp video deleted");
-      });
+      // Cleanup local video
+      fs.unlink(videoFile.path, (err) => { if (err) console.error("Video cleanup failed:", err); });
+
+      // 2. Upload Poster to Supabase (if exists)
+      if (posterFile) {
+          console.log(`Uploading poster ${posterFile.filename} to Supabase...`);
+          try {
+              posterPublicUrl = await uploadToSupabase(posterFile.path, posterFile.filename, posterFile.mimetype);
+              console.log(`Supabase Upload Success: ${posterPublicUrl}`);
+              
+              // Cleanup local poster
+              fs.unlink(posterFile.path, (err) => { if (err) console.error("Poster cleanup failed:", err); });
+          } catch(err) {
+              console.error("Poster upload failed, using default", err);
+              // Fallback?
+          }
+      }
 
   } catch (driveErr) {
-      console.error("Drive Upload Failed:", driveErr);
-      return res.status(500).json({ error: "Failed to upload video: " + driveErr.message });
+      console.error("Upload Failed:", driveErr);
+      return res.status(500).json({ error: "Failed to upload: " + driveErr.message });
   }
 
-  // Auto-generate thumbnail if no poster (Optional: risky if video deleted, skipping for safer MVP or assuming user provides poster)
-  // Logic: For Drive uploads, generating thumbnails from local file *before* delete is possible but complexity. 
-  // For MVP SaaS, let's require poster or use default.
-  // Auto-generate thumbnail if no poster
-  if (!posterFilename) {
-      posterFilename = 'default-poster.jpg';
+  if (!posterPublicUrl) {
+      posterPublicUrl = 'https://via.placeholder.com/500x750?text=No+Poster'; // Or a default hosted asset
   }
 
-  // 3. Save to Firestore
   try {
-      const newMovie = {
-          title,
-          description,
-          poster_path: posterFilename,
-          video_path: videoDriveLink,
-          year: year || '2025',
-          views: 0,
-          date_added: new Date().toISOString()
-      };
+      const sql = "INSERT INTO movies (title, description, poster_path, video_path, year) VALUES ($1, $2, $3, $4, $5) RETURNING id";
+      const params = [title, description, posterPublicUrl, videoDriveLink, year || '2025'];
 
-      const docRef = await db.collection('movies').add(newMovie);
+      const { rows } = await db.query(sql, params);
       
       res.json({
-          message: "Movie uploaded and processed successfully",
-          id: docRef.id,
-          data: newMovie
+        message: "Movie uploaded and processed successfully",
+        id: rows[0].id,
+        data: {
+          title,
+          video: videoDriveLink,
+          poster: posterPublicUrl
+        }
       });
   } catch (err) {
-      return res.status(500).json({ error: "DB Error: " + err.message });
+      return res.status(500).json({ error: err.message });
   }
 });
 
@@ -292,51 +280,140 @@ app.delete('/api/movies/:id', authenticateToken, async (req, res) => {
     const id = req.params.id;
     
     try {
-        // 1. Get Movie details to find Drive ID
-        const doc = await db.collection('movies').doc(id).get();
-        if (!doc.exists) return res.status(404).json({ error: "Movie not found" });
-        const movie = doc.data();
+        // 1. Get Movie details
+        const { rows } = await db.query("SELECT video_path, poster_path FROM movies WHERE id = $1", [id]);
+        if (rows.length === 0) return res.status(404).json({ error: "Movie not found" });
+        const row = rows[0];
 
-        // 2. Delete from Drive if it's a Drive link
-        if (movie.video_path && movie.video_path.includes('drive.google.com')) {
-            const fileId = movie.video_path.match(/[-\w]{25,}/)?.[0];
-            if (fileId) {
-                await deleteFromDrive(fileId);
-            }
+        // 2. Delete from Drive
+        if (row.video_path && row.video_path.includes('drive.google.com')) {
+            const fileId = row.video_path.match(/[-\w]{25,}/)?.[0];
+            if (fileId) await deleteFromDrive(fileId);
+        }
+        
+        // 3. Delete from Supabase
+        if (row.poster_path && row.poster_path.includes('supabase')) {
+             await deleteFromSupabase(row.poster_path);
         }
 
-        // 3. Delete from DB
-        await db.collection('movies').doc(id).delete();
+        // 4. Delete from DB
+        await db.query("DELETE FROM movies WHERE id = $1", [id]);
         res.json({ message: "Movie deleted successfully" });
 
     } catch (e) {
         console.error("Delete Error:", e);
-        res.status(500).json({ error: "Failed to delete: " + e.message });
+        res.status(500).json({ error: "Failed to delete movie", details: e.message });
     }
 });
 
-// Admin Update Movie (Metadata only)
-app.put('/api/movies/:id', authenticateToken, async (req, res) => {
-    const { title, description, year } = req.body;
+// Admin Update Movie
+app.put('/api/movies/:id', authenticateToken, upload.fields([{ name: 'video', maxCount: 1 }, { name: 'poster', maxCount: 1 }]), async (req, res) => {
     const id = req.params.id;
-
+    const { title, description, year } = req.body;
+    
     try {
-        await db.collection('movies').doc(id).update({
-            title, description, year
-        });
+        // 1. Get current movie data
+        const { rows } = await db.query("SELECT * FROM movies WHERE id = $1", [id]);
+        if (rows.length === 0) return res.status(404).json({ error: "Movie not found" });
+        const row = rows[0];
+
+        let newVideoPath = row.video_path;
+        let newPosterPath = row.poster_path;
+
+        // 2. Handle Video Replacement
+        if (req.files && req.files['video']) {
+            const videoFile = req.files['video'][0];
+            
+            // Delete old from Drive
+            if (row.video_path && row.video_path.includes('drive.google.com')) {
+                const oldFileId = row.video_path.match(/[-\w]{25,}/)?.[0];
+                if (oldFileId) await deleteFromDrive(oldFileId);
+            }
+
+            // Upload new to Drive
+            console.log(`Replacing video for movie ${id}...`);
+            newVideoPath = await uploadToDrive(videoFile.path, videoFile.originalname, videoFile.mimetype);
+            fs.unlinkSync(videoFile.path); // Cleanup
+        }
+
+        // 3. Handle Poster Replacement
+        if (req.files && req.files['poster']) {
+            const posterFile = req.files['poster'][0];
+            
+            // Delete old from Supabase
+            if (row.poster_path && row.poster_path.includes('supabase')) {
+                await deleteFromSupabase(row.poster_path);
+            }
+
+            // Upload new to Supabase
+            console.log(`Replacing poster for movie ${id}...`);
+            newPosterPath = await uploadToSupabase(posterFile.path, posterFile.filename, posterFile.mimetype);
+            fs.unlinkSync(posterFile.path); // Cleanup
+        }
+
+        // 4. Update DB
+        const sql = "UPDATE movies SET title = $1, description = $2, year = $3, video_path = $4, poster_path = $5 WHERE id = $6";
+        const params = [title, description, year, newVideoPath, newPosterPath, id];
+
+        await db.query(sql, params);
         res.json({ message: "Movie updated successfully" });
+
+    } catch (error) {
+        console.error("Update Failed:", error);
+        res.status(500).json({ error: "Failed to update movie: " + error.message });
+    }
+});
+
+// Admin Bulk Cleanup
+app.delete('/api/admin/cleanup', authenticateToken, async (req, res) => {
+    try {
+        const { rows } = await db.query("SELECT id, title, video_path, poster_path FROM movies WHERE title LIKE $1", ['%test%']);
+        
+        if (rows.length === 0) return res.json({ message: "No test data found.", count: 0 });
+
+        let deletedCount = 0;
+        const errors = [];
+
+        for (const row of rows) {
+            try {
+                // Delete from Drive
+                if (row.video_path && row.video_path.includes('drive.google.com')) {
+                    const fileId = row.video_path.match(/[-\w]{25,}/)?.[0];
+                    if (fileId) await deleteFromDrive(fileId);
+                }
+
+                // Delete from Supabase
+                if (row.poster_path && row.poster_path.includes('supabase')) {
+                    await deleteFromSupabase(row.poster_path);
+                }
+
+                // Delete from DB
+                await db.query("DELETE FROM movies WHERE id = $1", [row.id]);
+                deletedCount++;
+
+            } catch (e) {
+                console.error(`Failed to cleanup ID ${row.id}:`, e);
+                errors.push({ id: row.id, error: e.message });
+            }
+        }
+
+        res.json({ 
+            message: `Cleanup Complete. Deleted ${deletedCount} movies.`, 
+            count: deletedCount,
+            errors: errors.length > 0 ? errors : undefined
+        });
     } catch (err) {
-        return res.status(500).json({ error: err.message });
+        res.status(500).json({ error: err.message });
     }
 });
 
 // Global Error Handler
 app.use((err, req, res, next) => {
-  console.error("!!! UNHANDLED ERROR !!!");
-  console.error(err.stack);
+  console.error("Unhandled Error:", err.stack);
   res.status(500).json({ 
     error: "Internal Server Error", 
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined 
+    message: err.message,
+    stack: err.stack 
   });
 });
 

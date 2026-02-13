@@ -6,127 +6,144 @@ import SkeletonCard from '../components/SkeletonCard';
 import { PageTransition } from '../components/PageTransition';
 import { mockMovies } from '../data';
 import { ChevronRight, ChevronLeft } from 'lucide-react';
-import { API_BASE_URL } from '../config';
 import '../index.css';
 
+import { useQuery } from '@tanstack/react-query';
+
 const Home = () => {
-  const [loading, setLoading] = useState(true);
-  const [movies, setMovies] = useState([]);
-  const [featuredMovie, setFeaturedMovie] = useState(mockMovies[0]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeGenre, setActiveGenre] = useState('All');
 
-  useEffect(() => {
-    const fetchMovies = async () => {
-        try {
-            const response = await fetch(`${API_BASE_URL}/api/movies`);
-            const result = await response.json();
-            
-                // Transform API data to match MovieCard expected format
-            // Transform API data to match MovieCard expected format
-            const apiMovies = (result.data || []).map(m => {
-                const posterPath = m.poster_path;
-                // Check if posterPath is valid and not a string like "null" or "undefined"
-                const hasPoster = posterPath && posterPath !== 'null' && posterPath !== 'undefined';
-                const imageUrl = hasPoster 
-                    ? `${API_BASE_URL}/uploads/${posterPath}` 
-                    : 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&q=80&w=800'; // Fallback
+  const { data: movies = [], isLoading: loading, error } = useQuery({
+    queryKey: ['movies'],
+    queryFn: async () => {
+      const response = await fetch('http://localhost:5000/api/movies');
+      if (!response.ok) throw new Error('Network response was not ok');
+      return response.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    select: (result) => {
+        const rawMovies = [...(result.data || []), ...mockMovies.map(m => ({...m, id: `mock-${m.id}`}))];
+        
+        return rawMovies.map(m => {
+            const posterPath = m.poster_path;
+            const hasPoster = posterPath && posterPath !== 'null';
+            const imageUrl = hasPoster 
+                ? (posterPath.startsWith('http') ? posterPath : `http://localhost:5000/uploads/${posterPath}`)
+                : 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&q=80&w=800'; 
 
-                return {
-                    id: m.id,
-                    title: m.title,
-                    desc: m.description,
-                    hero: imageUrl,
-                    cover: imageUrl,
-                    video_url: m.video_path,
-                    match: 'NEW',
-                    year: m.year,
-                    duration: '1h 50m',
-                    genre: ['Action'],
-                    is_uploaded: true
-                };
-            });
-            setMovies(apiMovies);
-            
-            if (apiMovies.length > 0) {
-                setFeaturedMovie(apiMovies[0]); 
-            } else {
-                 setFeaturedMovie(null);
-            }
-        } catch (error) {
-            console.error("Failed to fetch movies:", error);
-            setMovies([]); // No mock fallback for production debugging
-        } finally {
-            setLoading(false);
-        }
-    };
+            // Auto-Assign Genre based on keywords
+            let genres = ['Action'];
+            const text = (m.title + ' ' + m.description).toLowerCase();
+            if (text.includes('cyber') || text.includes('future') || text.includes('space') || text.includes('robot')) genres.push('Sci-Fi');
+            if (text.includes('love') || text.includes('romance')) genres.push('Romance');
+            if (text.includes('dark') || text.includes('fear') || text.includes('horror')) genres.push('Horror');
+            if (text.includes('anime') || text.includes('animation')) genres.push('Anime');
 
-    const timer = new Promise(resolve => setTimeout(resolve, 800));
-    Promise.all([fetchMovies(), timer]);
-    
-  }, []);
+            return {
+                id: m.id,
+                title: m.title,
+                desc: m.description,
+                hero: imageUrl,
+                cover: imageUrl,
+                video_url: m.video_path,
+                match: 'NEW',
+                year: m.year,
+                duration: '1h 50m',
+                genre: genres,
+                is_uploaded: true
+            };
+        });
+    }
+  });
+
+  // Filter Logic
+  const filteredMovies = movies.filter(movie => {
+      const matchesSearch = movie.title.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesGenre = activeGenre === 'All' || movie.genre.includes(activeGenre);
+      return matchesSearch && matchesGenre;
+  });
+
+  const featuredMovie = movies.length > 0 ? movies[0] : mockMovies[0];
+  const genres = ['All', 'Action', 'Sci-Fi', 'Anime', 'Horror', 'Romance'];
+
+  if (error) console.error("Failed to fetch movies:", error);
 
   const scrollRow = (id, direction) => {
     const row = document.getElementById(id);
     if (row) {
         const scrollAmount = window.innerWidth * 0.8;
-        row.scrollBy({
-            left: direction === 'left' ? -scrollAmount : scrollAmount,
-            behavior: 'smooth'
-        });
+        row.scrollBy({ left: direction === 'left' ? -scrollAmount : scrollAmount, behavior: 'smooth' });
     }
   };
 
   return (
     <PageTransition>
       <div className="home">
-        <Navbar />
+        <Navbar searchTerm={searchQuery} onSearch={setSearchQuery} />
         
-        {loading ? (
-             <div className="skeleton-hero" style={{height: '85vh', background: '#0f172a'}}></div>
-        ) : (
-             <Hero movie={featuredMovie} />
-        )}
+        {!loading && !searchQuery && activeGenre === 'All' && <Hero movie={featuredMovie} />}
         
-        <div className="content-container container">
-          <section className="row-section">
-            <div className="section-header">
-              <h2 className="section-title">Trending Now</h2>
-            </div>
-            
-            <div className="row-wrapper">
-               <button className="row-control left" onClick={() => scrollRow('row-1', 'left')}>
-                  <ChevronLeft size={32} />
-               </button>
-               
-               <div className="movie-row" id="row-1">
-                  {loading 
-                    ? Array(6).fill(0).map((_, i) => <SkeletonCard key={i} />)
-                    : movies.map((movie, index) => (
-                        <MovieCard key={`trend-${movie.id}-${index}`} movie={movie} />
-                    ))
-                  }
-               </div>
+        <div className={`content-container container ${searchQuery || activeGenre !== 'All' ? 'filtered-view' : ''}`}>
+          
+          {/* Genre Filter Bar */}
+          <div className="genre-filters">
+            {genres.map(genre => (
+                <button 
+                    key={genre}
+                    className={`genre-chip ${activeGenre === genre ? 'active' : ''}`}
+                    onClick={() => setActiveGenre(genre)}
+                >
+                    {genre}
+                </button>
+            ))}
+          </div>
 
-               <button className="row-control right" onClick={() => scrollRow('row-1', 'right')}>
-                  <ChevronRight size={32} />
-               </button>
-            </div>
-          </section>
+          {/* Search/Filter Results or Default Sections */}
+          {(searchQuery || activeGenre !== 'All') ? (
+              <section className="row-section">
+                <h2 className="section-title">
+                    {searchQuery ? `Results for "${searchQuery}"` : `${activeGenre} Movies`}
+                </h2>
+                <div className="movie-grid">
+                    {filteredMovies.length > 0 ? (
+                        filteredMovies.map((movie, index) => (
+                            <MovieCard key={movie.id} movie={movie} />
+                        ))
+                    ) : (
+                        <p className="no-results">No movies found.</p>
+                    )}
+                </div>
+              </section>
+          ) : (
+            <>
+              <section className="row-section">
+                <div className="section-header"><h2 className="section-title">Trending Now</h2></div>
+                <div className="row-wrapper">
+                   <button className="row-control left" onClick={() => scrollRow('row-1', 'left')}><ChevronLeft size={32} /></button>
+                   <div className="movie-row" id="row-1">
+                      {loading 
+                        ? Array(6).fill(0).map((_, i) => <SkeletonCard key={i} />)
+                        : filteredMovies.map((movie, index) => <MovieCard key={`trend-${movie.id}`} movie={movie} />)
+                      }
+                   </div>
+                   <button className="row-control right" onClick={() => scrollRow('row-1', 'right')}><ChevronRight size={32} /></button>
+                </div>
+              </section>
 
-          <section className="row-section">
-            <h2 className="section-title">New Releases</h2>
-            <div className="row-wrapper">
-               <div className="movie-row" id="row-2">
-                  {loading
-                    ? Array(6).fill(0).map((_, i) => <SkeletonCard key={i} />)
-                    : movies.length === 0
-                        ? <div style={{color: '#94a3b8', padding: '20px'}}>No new releases.</div>
-                        : [...movies].reverse().map((movie, idx) => (
-                        <MovieCard key={`${movie.id}-new-${idx}`} movie={movie} />
-                    ))
-                  }
-              </div>
-            </div>
-          </section>
+              <section className="row-section">
+                <h2 className="section-title">New Releases</h2>
+                <div className="row-wrapper">
+                   <div className="movie-row" id="row-2">
+                      {loading
+                        ? Array(6).fill(0).map((_, i) => <SkeletonCard key={i} />)
+                        : [...filteredMovies].reverse().map((movie, idx) => <MovieCard key={`new-${movie.id}`} movie={movie} />)
+                      }
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
         </div>
 
         <style>{`
@@ -209,10 +226,63 @@ const Home = () => {
             .row-control.right { right: 0; }
         }
 
+        /* Filtered View Adjustments */
+        .filtered-view {
+            padding-top: 120px; /* More space for fixed nav + filter bar if needed */
+            min-height: 100vh;
+        }
+
+        .genre-filters {
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            padding: 10px 0 30px 0;
+            scrollbar-width: none;
+        }
+
+        .genre-chip {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #94a3b8;
+            padding: 8px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .genre-chip:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .genre-chip.active {
+            background: rgba(6, 182, 212, 0.1);
+            border-color: var(--neon-blue);
+            color: var(--neon-blue);
+            box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+        }
+
+        .movie-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+            padding-bottom: 50px;
+        }
+
+        .no-results {
+            color: #64748b;
+            text-align: center;
+            font-size: 1.2rem;
+            margin-top: 50px;
+            width: 100%;
+        }
+
         @media (max-width: 768px) {
             .hero-container { margin-bottom: 0; }
             .content-container { padding-left: 20px; padding-right: 20px; }
             .movie-row { padding: 0; margin: 0; }
+            .movie-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
         }
         `}</style>
       </div>

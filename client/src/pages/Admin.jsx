@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Navbar from '../components/Navbar';
 import { Upload, FileVideo, Image as ImageIcon, CheckCircle, AlertCircle, Cloud, Trash2, Edit2, X, Search, Plus, Film } from 'lucide-react';
-import { API_BASE_URL } from '../config';
 import { PageTransition } from '../components/PageTransition';
+import { API_URL } from '../config';
 import '../index.css';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 const Admin = () => {
   const [view, setView] = useState('dashboard'); // 'dashboard' | 'upload'
-  const [movies, setMovies] = useState([]);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState('');
   const [driveConnected, setDriveConnected] = useState(false);
+  const queryClient = useQueryClient();
   
   // Upload State
   const [formData, setFormData] = useState({ title: '', description: '', year: '' });
@@ -25,38 +26,42 @@ const Admin = () => {
   const [editingMovie, setEditingMovie] = useState(null);
   const [deletingMovie, setDeletingMovie] = useState(null);
 
+  // Auth Check
   useEffect(() => {
       const token = localStorage.getItem('admin_token');
       if (token) {
           setIsAuthenticated(true);
           checkDriveStatus(token);
-          fetchMovies(token);
       }
-  }, [isAuthenticated]);
+  }, []);
+
+  // Use Query for Movies (Synced with Home)
+  const { data: movies = [] } = useQuery({
+      queryKey: ['movies'],
+      queryFn: async () => {
+          // Use public endpoint to share cache with Home
+          const res = await fetch(`${API_URL}/api/movies`);
+          if (!res.ok) throw new Error("Failed");
+          const json = await res.json();
+          return json.data || [];
+      },
+      staleTime: 5 * 60 * 1000 
+  });
 
   const checkDriveStatus = (token) => {
-    fetch(`${API_BASE_URL}/api/drive/status`, {
+    fetch(`${API_URL}/api/drive/status`, {
         headers: { 'Authorization': `Bearer ${token}` }
     })
     .then(res => res.json())
     .then(data => setDriveConnected(data.connected))
     .catch(err => console.error("Drive Check Error", err));
   };
-
-  const fetchMovies = (token) => {
-      const t = token || localStorage.getItem('admin_token');
-      fetch(`${API_BASE_URL}/api/movies`, {
-        headers: { 'Authorization': `Bearer ${t}` }
-      })
-      .then(res => res.json())
-      .then(data => setMovies(data.data || []))
-      .catch(err => console.error("Fetch Movies Error:", err));
-  };
+    // fetchMovies removed (handled by useQuery)
 
   const handleLogin = async (e) => {
       e.preventDefault();
       try {
-          const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+          const res = await fetch(`${API_URL}/api/auth/login`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ password })
@@ -69,7 +74,7 @@ const Admin = () => {
               alert("Invalid Password");
           }
       } catch (err) {
-          console.error("Login Error:", err);
+          console.log(err);
       }
   };
 
@@ -102,7 +107,7 @@ const Admin = () => {
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
 
-    xhr.open('POST', `${API_BASE_URL}/api/upload`);
+    xhr.open('POST', `${API_URL}/api/upload`);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
     xhr.upload.onprogress = (event) => {
@@ -124,7 +129,8 @@ const Admin = () => {
             setVideoFile(null);
             setPosterFile(null);
             setUploadProgress(0);
-            fetchMovies(token); // Refresh list
+            setUploadProgress(0);
+            queryClient.invalidateQueries({ queryKey: ['movies'] }); // Refresh Cache
             setTimeout(() => {
                 setStatus('idle');
                 setView('dashboard'); // Return to dashboard
@@ -162,27 +168,56 @@ const Admin = () => {
   };
 
   /* --- EDIT LOGIC --- */
+  const [editVideoFile, setEditVideoFile] = useState(null);
+  const [editPosterFile, setEditPosterFile] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+
+  // When opening modal
+  const openEditModal = (movie) => {
+      setEditingMovie(movie);
+      setEditVideoFile(null);
+      setEditPosterFile(null);
+  };
   
   const handleEditSubmit = async (e) => {
       e.preventDefault();
       const token = localStorage.getItem('admin_token');
+      
+      setIsEditing(true);
+      setMessage("Updating Movie... (This may take time if replacing video)");
+
+      const formData = new FormData();
+      formData.append('title', editingMovie.title);
+      formData.append('description', editingMovie.description);
+      formData.append('year', editingMovie.year);
+      
+      if (editVideoFile) formData.append('video', editVideoFile);
+      if (editPosterFile) formData.append('poster', editPosterFile);
+
       try {
-          const res = await fetch(`${API_BASE_URL}/api/movies/${editingMovie.id}`, {
+          // Using fetch heavily implies no upload progress for edit, but okay for MVP SaaS
+          const res = await fetch(`${API_URL}/api/movies/${editingMovie.id}`, {
               method: 'PUT',
               headers: { 
-                  'Content-Type': 'application/json',
                   'Authorization': `Bearer ${token}`
               },
-              body: JSON.stringify(editingMovie)
+              body: formData
           });
+          
           if (res.ok) {
               setEditingMovie(null);
-              fetchMovies(token);
+              queryClient.invalidateQueries({ queryKey: ['movies'] }); // Refresh Cache
+              setMessage("Update Success!");
+              setTimeout(() => setMessage(''), 3000);
           } else {
-              alert("Update failed");
+              const err = await res.json();
+              alert("Update failed: " + err.error);
           }
       } catch (err) {
           console.error(err);
+          alert("Update failed: Network Error");
+      } finally {
+          setIsEditing(false);
       }
   };
 
@@ -193,19 +228,46 @@ const Admin = () => {
       const token = localStorage.getItem('admin_token');
       
       try {
-          const res = await fetch(`${API_BASE_URL}/api/movies/${deletingMovie.id}`, {
+          const res = await fetch(`${API_URL}/api/movies/${deletingMovie.id}`, {
               method: 'DELETE',
               headers: { 'Authorization': `Bearer ${token}` }
           });
           
           if (res.ok) {
               setDeletingMovie(null);
-              fetchMovies(token);
+              queryClient.invalidateQueries({ queryKey: ['movies'] });
           } else {
               alert("Delete failed");
           }
       } catch (err) {
           console.error(err);
+      }
+  };
+
+  /* --- CLEANUP LOGIC --- */
+  const [showCleanupModal, setShowCleanupModal] = useState(false);
+  const [isCleaning, setIsCleaning] = useState(false);
+
+  const handleCleanup = async () => {
+      setIsCleaning(true);
+      const token = localStorage.getItem('admin_token');
+      try {
+          const res = await fetch(`${API_URL}/api/admin/cleanup`, {
+              method: 'DELETE',
+              headers: { 'Authorization': `Bearer ${token}` }
+          });
+          const data = await res.json();
+          if (res.ok) {
+              alert(data.message);
+              queryClient.invalidateQueries({ queryKey: ['movies'] });
+              setShowCleanupModal(false);
+          } else {
+              alert("Cleanup Failed: " + data.error);
+          }
+      } catch (e) {
+          alert("Network Error");
+      } finally {
+          setIsCleaning(false);
       }
   };
 
@@ -244,7 +306,7 @@ const Admin = () => {
                 </div>
                 <div style={{display:'flex', gap:'10px'}}>
                     {!driveConnected && (
-                        <a href={`${API_BASE_URL}/api/auth/google`} target="_blank" className="btn-secondary">
+                        <a href={`${API_URL}/api/auth/google`} target="_blank" className="btn-secondary">
                             Connect Drive
                         </a>
                     )}
@@ -259,16 +321,21 @@ const Admin = () => {
                 <div className="dashboard-view">
                     <div className="dash-toolbar">
                         <h2>Library ({movies.length})</h2>
-                        <button onClick={() => setView('upload')} className="btn-primary">
-                            <Plus size={18} style={{marginRight: '6px'}}/> Add Movie
-                        </button>
+                        <div style={{display:'flex', gap:'10px'}}>
+                            <button onClick={() => setShowCleanupModal(true)} className="btn-secondary" style={{borderColor:'rgba(239, 68, 68, 0.3)', color:'#ef4444'}}>
+                                <Trash2 size={18} style={{marginRight: '6px'}}/> Cleanup Test Data
+                            </button>
+                            <button onClick={() => setView('upload')} className="btn-primary">
+                                <Plus size={18} style={{marginRight: '6px'}}/> Add Movie
+                            </button>
+                        </div>
                     </div>
 
                     <div className="movie-list">
                         {movies.map(movie => (
                             <div key={movie.id} className="movie-row glass-panel">
                                 <img 
-                                    src={movie.poster_path ? `${API_BASE_URL}/uploads/${movie.poster_path}` : 'https://via.placeholder.com/150'} 
+                                    src={movie.poster_path ? `${API_URL}/uploads/${movie.poster_path}` : 'https://via.placeholder.com/150'} 
                                     alt={movie.title} 
                                     className="row-poster"
                                 />
@@ -277,7 +344,7 @@ const Admin = () => {
                                     <p>{movie.year} • {movie.views} views</p>
                                 </div>
                                 <div className="row-actions">
-                                    <button onClick={() => setEditingMovie(movie)} className="action-btn edit">
+                                    <button onClick={() => openEditModal(movie)} className="action-btn edit">
                                         <Edit2 size={18} />
                                     </button>
                                     <button onClick={() => setDeletingMovie(movie)} className="action-btn delete">
@@ -367,24 +434,61 @@ const Admin = () => {
       {/* Edit Modal */}
       {editingMovie && (
           <div className="modal-overlay">
-              <div className="modal-content glass-panel">
-                  <h3>Edit Movie</h3>
+              <div className="modal-content glass-panel" style={{maxWidth: '600px'}}>
+                  <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px'}}>
+                    <h3>Edit Movie</h3>
+                    <button type="button" onClick={() => setEditingMovie(null)} className="btn-text-danger"><X size={20}/></button>
+                  </div>
+                  
                   <form onSubmit={handleEditSubmit}>
-                      <div className="form-group">
-                          <label>Title</label>
-                          <input type="text" value={editingMovie.title} onChange={e => setEditingMovie({...editingMovie, title: e.target.value})} className="input-modern"/>
+                      <div className="upload-grid" style={{marginTop:'0', gap:'20px'}}>
+                          <div className="left-col">
+                              <div className="form-group">
+                                  <label>Title</label>
+                                  <input type="text" value={editingMovie.title} onChange={e => setEditingMovie({...editingMovie, title: e.target.value})} className="input-modern"/>
+                              </div>
+                              <div className="form-group">
+                                  <label>Year</label>
+                                  <input type="text" value={editingMovie.year} onChange={e => setEditingMovie({...editingMovie, year: e.target.value})} className="input-modern"/>
+                              </div>
+                              <div className="form-group">
+                                  <label>Description</label>
+                                  <textarea value={editingMovie.description} onChange={e => setEditingMovie({...editingMovie, description: e.target.value})} rows="5" className="input-modern textarea"/>
+                              </div>
+                          </div>
+                          
+                          <div className="right-col">
+                              <label style={{color:'#94a3b8', fontSize:'0.9rem', marginBottom:'8px', display:'block'}}>Replace Media (Optional)</label>
+                              
+                              <div className={`file-drop-zone sm ${editPosterFile ? 'active' : ''}`} style={{height:'100px'}}>
+                                  <input type="file" accept="image/*" onChange={(e) => setEditPosterFile(e.target.files[0])} id="edit-poster" hidden />
+                                  <label htmlFor="edit-poster" className="drop-label">
+                                      <ImageIcon size={20} className="drop-icon" />
+                                      <span className="drop-text" style={{fontSize:'0.8rem'}}>{editPosterFile ? editPosterFile.name : "Replace Poster"}</span>
+                                  </label>
+                              </div>
+
+                              <div className={`file-drop-zone sm ${editVideoFile ? 'active' : ''}`} style={{height:'100px'}}>
+                                  <input type="file" accept="video/*" onChange={(e) => setEditVideoFile(e.target.files[0])} id="edit-video" hidden />
+                                  <label htmlFor="edit-video" className="drop-label">
+                                      <FileVideo size={20} className="drop-icon" />
+                                      <span className="drop-text" style={{fontSize:'0.8rem'}}>{editVideoFile ? editVideoFile.name : "Replace Video"}</span>
+                                  </label>
+                              </div>
+                          </div>
                       </div>
-                      <div className="form-group">
-                          <label>Year</label>
-                          <input type="text" value={editingMovie.year} onChange={e => setEditingMovie({...editingMovie, year: e.target.value})} className="input-modern"/>
-                      </div>
-                      <div className="form-group">
-                          <label>Description</label>
-                          <textarea value={editingMovie.description} onChange={e => setEditingMovie({...editingMovie, description: e.target.value})} rows="3" className="input-modern textarea"/>
-                      </div>
-                      <div className="modal-actions">
-                          <button type="button" onClick={() => setEditingMovie(null)} className="btn-secondary">Cancel</button>
-                          <button type="submit" className="btn-primary">Save Changes</button>
+
+                      <div className="modal-actions" style={{marginTop:'20px'}}>
+                          {isEditing ? (
+                              <div style={{color:'var(--neon-blue)', display:'flex', alignItems:'center', gap:'10px'}}>
+                                  <div className="loader-spinner"></div> Updating...
+                              </div>
+                          ) : (
+                              <>
+                                <button type="button" onClick={() => setEditingMovie(null)} className="btn-secondary">Cancel</button>
+                                <button type="submit" className="btn-primary">Save Changes</button>
+                              </>
+                          )}
                       </div>
                   </form>
               </div>
@@ -401,6 +505,26 @@ const Admin = () => {
                   <div className="modal-actions">
                       <button onClick={() => setDeletingMovie(null)} className="btn-secondary">Cancel</button>
                       <button onClick={confirmDelete} className="btn-danger">Yes, Delete Forever</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Cleanup Modal */}
+      {showCleanupModal && (
+          <div className="modal-overlay">
+              <div className="modal-content glass-panel">
+                  <h3 className="text-danger">Cleanup Test Data?</h3>
+                  <p>This will permanently delete ALL movies with <strong>"test"</strong> in their title.</p>
+                  <p className="warning-text">
+                      Files will be wiped from Google Drive and the Database.<br/>
+                      <strong>This cannot be undone.</strong>
+                  </p>
+                  <div className="modal-actions">
+                      <button onClick={() => setShowCleanupModal(false)} className="btn-secondary" disabled={isCleaning}>Cancel</button>
+                      <button onClick={handleCleanup} className="btn-danger" disabled={isCleaning}>
+                          {isCleaning ? 'Cleaning...' : 'Yes, Delete All Test Data'}
+                      </button>
                   </div>
               </div>
           </div>

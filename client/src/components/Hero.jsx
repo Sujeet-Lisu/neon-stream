@@ -1,28 +1,10 @@
 import React from 'react';
 import { Play, Info } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import '../index.css';
 
 const Hero = ({ movie }) => {
-  if (!movie) {
-    return (
-        <div className="hero-container" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'radial-gradient(circle at center, #1e1b4b 0%, #0f172a 100%)'}}>
-            <div className="hero-content container">
-                 <div className="content-wrapper">
-                    <h1 className="hero-title">Neon Stream</h1>
-                    <p className="hero-desc">Welcome to your personal streaming library.</p>
-                </div>
-            </div>
-             <style>{`
-                .hero-container { position: relative; width: 100%; height: 85vh; margin-bottom: -150px; overflow: hidden; }
-                .hero-content { position: relative; height: 100%; display: flex; align-items: center; z-index: 10; }
-                .content-wrapper { max-width: 600px; margin-top: 100px; }
-                .hero-title { font-size: 5rem; font-weight: 800; line-height: 1; margin-bottom: 24px; text-transform: uppercase; background: linear-gradient(to bottom, #fff 0%, #ccc 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-                .hero-desc { font-size: 1.25rem; color: rgba(255,255,255,0.9); margin-bottom: 32px; }
-                @media (max-width: 768px) { .hero-title { font-size: 3rem; } }
-            `}</style>
-        </div>
-    );
-  }
+  const navigate = useNavigate();
 
   return (
     <div className="hero-container">
@@ -45,7 +27,7 @@ const Hero = ({ movie }) => {
             <p className="hero-desc">{movie.desc}</p>
             
             <div className="hero-actions">
-            <button className="btn-primary">
+            <button className="btn-primary" onClick={() => navigate(`/watch/${movie.id}`)}>
                 <Play size={24} fill="currentColor" /> Play
             </button>
             <button className="btn-secondary">

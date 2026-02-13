@@ -3,7 +3,7 @@ import { Search, Bell, User, Menu, X } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import '../index.css';
 
-const Navbar = () => {
+const Navbar = ({ searchTerm, onSearch }) => {
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
@@ -47,8 +47,15 @@ const Navbar = () => {
         </div>
         
         <div className="nav-right">
-          <div className="icon-wrapper">
-            <Search size={22} />
+          <div className="search-container">
+            <Search size={18} className="search-icon" />
+            <input 
+                type="text" 
+                placeholder="Search titles..." 
+                className="search-input"
+                value={searchTerm}
+                onChange={(e) => onSearch(e.target.value)}
+            />
           </div>
           <div className="icon-wrapper">
             <Bell size={22} />
@@ -148,7 +155,14 @@ const Navbar = () => {
         .nav-right {
           display: flex;
           align-items: center;
-          gap: 24px;
+          gap: 16px; /* Reduced gap */
+        }
+
+        @media (max-width: 600px) {
+            .nav-left { gap: 16px; }
+            .brand-logo { font-size: 1.4rem; }
+            /* Hide Search and Bell on mobile to save space */
+            .icon-wrapper { display: none; }
         }
 
         .icon-wrapper {
@@ -226,6 +240,49 @@ const Navbar = () => {
           .mobile-toggle {
             display: block;
           }
+           /* On mobile, shrink search or hide text */
+          .search-container { width: 40px; background: transparent; border: none; }
+          .search-input { display: none; }
+          .search-icon { color: white; }
+        }
+
+        /* Search Bar Styles */
+        .search-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 6px 12px;
+            transition: all 0.3s ease;
+            width: 240px;
+        }
+
+        .search-container:focus-within {
+            background: rgba(0, 0, 0, 0.6);
+            border-color: var(--neon-blue);
+            box-shadow: 0 0 10px rgba(6, 182, 212, 0.3);
+            width: 280px;
+        }
+
+        .search-icon {
+            color: #94a3b8;
+            min-width: 18px;
+        }
+
+        .search-input {
+            background: transparent;
+            border: none;
+            outline: none;
+            color: white;
+            margin-left: 8px;
+            font-size: 0.9rem;
+            width: 100%;
+        }
+
+        .search-input::placeholder {
+            color: #64748b;
         }
       `}</style>
     </nav>
