@@ -227,9 +227,6 @@ app.post('/api/upload', authenticateToken, upload.fields([{ name: 'video', maxCo
       console.log(`Uploading ${videoFile.filename} to Drive Folder ${SHARED_FOLDER_ID}...`);
       videoDriveLink = await uploadToDrive(videoFile.path, videoFile.originalname, videoFile.mimetype, SHARED_FOLDER_ID);
       console.log(`Drive Upload Success: ${videoDriveLink}`);
-      
-      // Cleanup local video
-      fs.unlink(videoFile.path, (err) => { if (err) console.error("Video cleanup failed:", err); });
 
       // 2. Upload Poster to Supabase (if exists)
       if (posterFile) {
@@ -237,19 +234,23 @@ app.post('/api/upload', authenticateToken, upload.fields([{ name: 'video', maxCo
           try {
               posterPublicUrl = await uploadToSupabase(posterFile.path, posterFile.filename, posterFile.mimetype);
               console.log(`Supabase Upload Success: ${posterPublicUrl}`);
-              
-              // Cleanup local poster
-              fs.unlink(posterFile.path, (err) => { if (err) console.error("Poster cleanup failed:", err); });
           } catch(err) {
               console.error("Poster upload failed, using default", err);
-              // Fallback?
           }
       }
 
   } catch (driveErr) {
       console.error("Upload Failed:", driveErr);
+      // Ensure cleanup happens even on error
+      if (fs.existsSync(videoFile.path)) fs.unlink(videoFile.path, () => {});
+      if (req.files.poster && fs.existsSync(req.files.poster[0].path)) fs.unlink(req.files.poster[0].path, () => {});
+      
       return res.status(500).json({ error: "Failed to upload: " + driveErr.message });
   }
+
+  // Cleanup successful uploads
+  if (fs.existsSync(videoFile.path)) fs.unlink(videoFile.path, () => {});
+  if (req.files.poster && fs.existsSync(req.files.poster[0].path)) fs.unlink(req.files.poster[0].path, () => {});
 
   if (!posterPublicUrl) {
       posterPublicUrl = 'https://via.placeholder.com/500x750?text=No+Poster'; // Or a default hosted asset
