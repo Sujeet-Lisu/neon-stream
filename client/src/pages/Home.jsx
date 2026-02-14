@@ -8,6 +8,7 @@ import { mockMovies } from '../data';
 import { ChevronRight, ChevronLeft } from 'lucide-react';
 import '../index.css';
 
+import { API_URL } from '../config';
 import { useQuery } from '@tanstack/react-query';
 
 const Home = () => {
@@ -17,7 +18,7 @@ const Home = () => {
   const { data: movies = [], isLoading: loading, error } = useQuery({
     queryKey: ['movies'],
     queryFn: async () => {
-      const response = await fetch('http://localhost:5000/api/movies');
+      const response = await fetch(`${API_URL}/api/movies`);
       if (!response.ok) throw new Error('Network response was not ok');
       return response.json();
     },
@@ -29,7 +30,7 @@ const Home = () => {
             const posterPath = m.poster_path;
             const hasPoster = posterPath && posterPath !== 'null';
             const imageUrl = hasPoster 
-                ? (posterPath.startsWith('http') ? posterPath : `http://localhost:5000/uploads/${posterPath}`)
+                ? (posterPath.startsWith('http') ? posterPath : `${API_URL}/uploads/${posterPath}`)
                 : 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&q=80&w=800'; 
 
             // Auto-Assign Genre based on keywords
