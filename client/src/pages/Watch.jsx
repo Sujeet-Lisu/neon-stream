@@ -1,5 +1,5 @@
 import React from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import VideoPlayer from '../components/VideoPlayer';
 import { mockMovies } from '../data';
 import { AlertCircle, ArrowLeft } from 'lucide-react';
@@ -8,6 +8,7 @@ import '../index.css';
 
 const Watch = () => {
   const { id } = useParams();
+  const navigate = useNavigate();
   
   // Logic to find movie:
   // 1. Try finding in mockMovies first (since we don't have a global store for fetched ones yet in this simple app)
@@ -78,9 +79,12 @@ const Watch = () => {
       <div 
         className="watch-back-btn" 
         onClick={() => {
-            // Try to go back, else home
-            if (window.history.length > 1) window.history.back();
-            else window.location.href = '/'; 
+            // Use Router navigation for SPA experience
+            if (window.history.length > 2) {
+                navigate(-1);
+            } else {
+                navigate('/');
+            }
         }}
       >
         <ArrowLeft size={30} />

@@ -128,69 +128,43 @@ const VideoPlayer = ({ src, poster }) => {
       {/* Back button is now handled by parent Watch component */}
 
 
-      {isLoading && !src.includes('drive.google.com') && (
+      {isLoading && (
         <div className="loading-overlay">
             <Loader className="spinner" size={50} />
         </div>
       )}
 
-      {src.includes('drive.google.com') ? (
-        <>
-         <iframe 
-            src={src.includes('/preview') ? src : `https://drive.google.com/file/d/${src.match(/[-\w]{25,}/)?.[0] || ""}/preview`}
-            className="video-element" 
-            allow="autoplay; encrypted-media; fullscreen"
-            allowFullScreen
-            style={{border: 'none'}}
-            onLoad={() => setIsLoading(false)}
-            onError={() => setIsLoading(false)}
-         />
-         <div style={{
-             position: 'absolute',
-             bottom: '20px', 
-             right: '20px',
-             display: 'flex',
-             flexDirection: 'column',
-             alignItems: 'end',
-             zIndex: 50
-         }}>
-             <a 
-                href={src.replace('/preview', '/view')} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                style={{
-                    color: 'rgba(255,255,255,0.7)',
-                    textDecoration: 'none',
-                    fontSize: '0.9rem',
-                    fontWeight: 500,
-                    marginBottom: '5px'
-                }}
-             >
-                Open in Drive ↗
-             </a>
-             <span style={{color: 'rgba(255,255,255,0.4)', fontSize: '0.75rem'}}>
-                (If video is blank, Google is still processing it)
-             </span>
-         </div>
-        </>
-      ) : (
-          <video
-            ref={videoRef}
-            src={src}
-            poster={poster}
-            className="video-element"
-            onTimeUpdate={handleTimeUpdate}
-            onClick={togglePlay}
-            onWaiting={() => setIsLoading(true)}
-            onCanPlay={() => setIsLoading(false)}
-            onLoadedData={() => setIsLoading(false)}
-          />
-      )}
+      {/* 
+        Unified Direct Stream Player 
+        We treat Drive links as direct video sources now, bypassing the IFrame/Preview restrictions.
+        This forces the browser to resolve the video stream directly (Original Quality).
+      */}
+      {/* 
+        Unified Direct Stream Player (Proxied)
+        We use our backend proxy to stream Drive files, bypassing CORS issues.
+      */}
+      <video
+        ref={videoRef}
+        src={src.includes('drive.google.com') 
+            ? `${(import.meta.env.VITE_API_URL || 'http://localhost:5000')}/api/proxy/drive/${src.match(/[-\w]{25,}/)?.[0]}`
+            : src
+        }
+        poster={poster}
+        className="video-element"
+        onTimeUpdate={handleTimeUpdate}
+        onClick={togglePlay}
+        onWaiting={() => setIsLoading(true)}
+        onCanPlay={() => setIsLoading(false)}
+        onLoadedData={() => setIsLoading(false)}
+        controlsList="nodownload" 
+        crossOrigin="anonymous" 
+      />
 
       {/* Only show custom controls for native video, OR maybe a simple overlay for Drive? 
           Drive player has its own controls. We should probably hide our custom controls if it's Drive.
       */}
-      {!src.includes('drive.google.com') && (
+      {/* Custom Controls for All Video Types */}
+      {true && (
       <div className={`controls-overlay ${showControls ? 'visible' : 'hidden'}`}>
         {/* Progress Bar */}
         <div className="progress-container" onClick={handleSeek}>

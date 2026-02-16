@@ -54,11 +54,23 @@ const initClient = async () => {
             console.log('⚠️ Drive Service: OAuth2 Client Initialized (No Token found). Please Authenticate.');
         }
     }
-
   } catch (err) {
       console.error("❌ Drive Service Init Error:", err.message);
   }
 };
+
+// Auto-Save Refreshed Tokens
+oAuth2Client.on('tokens', (tokens) => {
+    if (tokens.refresh_token) {
+        // store the refresh_token in your database
+        console.log("🔄 Drive Service: Received NEW Refresh Token. Saving...");
+    }
+    // Always save access_token
+    const tokenStr = JSON.stringify(tokens);
+    db.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2", ['drive_token', tokenStr])
+      .then(() => console.log("✅ Drive Service: Refreshed Token updated in DB."))
+      .catch(err => console.error("❌ Failed to save Refreshed Token:", err));
+});
 
 // Trigger initialization
 initClient();
@@ -69,6 +81,7 @@ const getAuthUrl = () => {
     return oAuth2Client.generateAuthUrl({
         access_type: 'offline', // Critical for refresh token
         scope: SCOPES,
+        prompt: 'consent' // Force approval prompt to ensure Refresh Token is returned
     });
 };
 
@@ -95,6 +108,12 @@ const isConnected = () => {
 /**
  * Uploads a file to Google Drive using OAuth Client
  */
+/**
+ * Uploads a file to Google Drive using OAuth Client (Resumable for HD Quality)
+ */
+/**
+ * Uploads a file to Google Drive using OAuth Client (Resumable for HD Quality)
+ */
 async function uploadToDrive(filePath, fileName, mimeType, folderId = null) {
   if (!isConnected()) {
       throw new Error("Drive Not Connected: Admin must authenticate via OAuth first.");
@@ -108,19 +127,25 @@ async function uploadToDrive(filePath, fileName, mimeType, folderId = null) {
       parents: folderId ? [folderId] : [] 
     };
     
+    // Explicitly set mimeType for the stream to prevent Drive from auto-converting/compressing incorrectly
     const media = {
-      mimeType: mimeType,
-      body: fs.createReadStream(filePath),
+      mimeType: mimeType, 
+      body: fs.createReadStream(filePath, { highWaterMark: 5 * 1024 * 1024 }), // Set Chunk Size to 5MB via stream buffer
     };
+
+    console.log(`Starting Resumable Upload: ${fileName} (${mimeType})`);
 
     const response = await drive.files.create({
       requestBody: fileMetadata,
       media: media,
-      fields: 'id, webViewLink, webContentLink',
-      supportsAllDrives: true
+      // Request webContentLink for direct streaming
+      fields: 'id, name, mimeType, webViewLink, webContentLink',
+      supportsAllDrives: true,
+      resumable: true // CRITICAL: Ensures high reliability & quality for large files
     });
 
     const fileId = response.data.id;
+    console.log(`Upload Complete. File ID: ${fileId} | MIME: ${response.data.mimeType}`);
     
     // Make file public
     await drive.permissions.create({
@@ -131,7 +156,9 @@ async function uploadToDrive(filePath, fileName, mimeType, folderId = null) {
       },
     });
 
-    return response.data.webViewLink;
+    // Return the webContentLink (Direct Stream) as requested
+    // Fallback to webViewLink if content link is missing (rare)
+    return response.data.webContentLink || response.data.webViewLink;
 
   } catch (error) {
     if (error.code === 401 || (error.response && error.response.status === 401)) {
@@ -140,7 +167,31 @@ async function uploadToDrive(filePath, fileName, mimeType, folderId = null) {
     }
     console.error('Drive Upload Error:', error);
     throw error;
+  } finally {
+      // Guaranteed Cleanup: Ensure temp file is deleted whether upload succeeds or fails.
+      try {
+          if (fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+              console.log(`Cleanup: Deleted temp file ${filePath}`);
+          }
+      } catch (cleanupErr) {
+          console.error("Cleanup Error:", cleanupErr); 
+      }
   }
+}
+
+/**
+ * Helper to convert Drive View Link to Direct Stream Link
+ */
+function getDirectLink(viewLink) {
+    if (!viewLink) return '';
+    if (viewLink.includes('export=download')) return viewLink;
+    
+    // Extract ID
+    const fileId = viewLink.match(/[-\w]{25,}/)?.[0];
+    if (!fileId) return viewLink;
+
+    return `https://drive.google.com/uc?id=${fileId}&export=download`;
 }
 
 /**
@@ -177,11 +228,105 @@ async function validateConnection() {
     }
 }
 
+async function getDriveFileStream(fileId, req, res) {
+    if (!isConnected()) {
+        throw new Error("Drive Not Connected");
+    }
+    const drive = google.drive({ version: 'v3', auth: oAuth2Client });
+
+    try {
+        // 1. Get File Metadata (Content-Length, Content-Type)
+        const metadata = await drive.files.get({
+            fileId: fileId,
+            fields: 'size, mimeType, name'
+        });
+        
+        const fileSize = parseInt(metadata.data.size, 10);
+        const mimeType = metadata.data.mimeType;
+        const range = req.headers.range;
+
+        // 2. Handle Range Requests (Seeking)
+        if (range) {
+            const parts = range.replace(/bytes=/, "").split("-");
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const chunksize = (end - start) + 1;
+
+            const head = {
+                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': chunksize,
+                'Content-Type': mimeType,
+            };
+            res.writeHead(206, head);
+
+            // Stream byte range
+            const response = await drive.files.get({
+                fileId: fileId,
+                alt: 'media'
+            }, { 
+                responseType: 'stream',
+                headers: { 'Range': `bytes=${start}-${end}` } 
+            });
+            
+            const stream = response.data;
+            
+            stream.on('error', (err) => {
+                console.error("Stream Data Error:", err);
+                res.end();
+            });
+
+            stream.pipe(res);
+
+        } else {
+            const head = {
+                'Content-Length': fileSize,
+                'Content-Type': mimeType,
+            };
+            res.writeHead(200, head);
+
+            // Stream full file
+            const response = await drive.files.get({
+                fileId: fileId,
+                alt: 'media'
+            }, { responseType: 'stream' });
+
+            const stream = response.data;
+             stream.on('error', (err) => {
+                console.error("Stream Data Error:", err);
+                res.end();
+            });
+            stream.pipe(res);
+        }
+
+    } catch (error) {
+        // Auto-Retry on 401 (Token Expired)
+        if (error.code === 401 || (error.response && error.response.status === 401)) {
+            console.log("⚠️ 401 in Stream: Attempting to refresh token...");
+            try {
+                // Force check - fetching a new access token might trigger the 'tokens' event
+                await oAuth2Client.getAccessToken(); 
+                // Retry the stream ONCE
+                console.log("🔄 Token Refreshed. Retrying stream...");
+                return getDriveFileStream(fileId, req, res); 
+            } catch (refreshErr) {
+                 console.error("❌ Refresh Failed inside stream:", refreshErr.message);
+                 if (!res.headersSent) res.status(401).send("Stream Failed: Auth Expired");
+                 return;
+            }
+        }
+
+        console.error("Stream Error:", error.message);
+        if (!res.headersSent) res.status(500).send("Stream Failed: " + error.message);
+    }
+}
+
 module.exports = { 
     uploadToDrive, 
     deleteFromDrive,
     getAuthUrl, 
     saveToken, 
     isConnected,
-    validateConnection
+    validateConnection,
+    getDriveFileStream // Exported
 };

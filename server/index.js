@@ -202,6 +202,15 @@ app.get('/api/auth/google/callback', async (req, res) => {
     }
 });
 
+// 4. Proxy Stream Route (Bypasses CORS for direct playback)
+const { getDriveFileStream } = require('./services/driveService');
+app.get('/api/proxy/drive/:fileId', async (req, res) => {
+    const fileId = req.params.fileId;
+    if (!fileId) return res.status(400).send("Missing File ID");
+    
+    await getDriveFileStream(fileId, req, res);
+});
+
 // Admin Upload Endpoint
 app.post('/api/upload', authenticateToken, upload.fields([{ name: 'video', maxCount: 1 }, { name: 'poster', maxCount: 1 }]), async (req, res) => {
   const { title, description, year } = req.body;
@@ -325,16 +334,25 @@ app.put('/api/movies/:id', authenticateToken, upload.fields([{ name: 'video', ma
         if (req.files && req.files['video']) {
             const videoFile = req.files['video'][0];
             
-            // Delete old from Drive
-            if (row.video_path && row.video_path.includes('drive.google.com')) {
-                const oldFileId = row.video_path.match(/[-\w]{25,}/)?.[0];
-                if (oldFileId) await deleteFromDrive(oldFileId);
-            }
-
-            // Upload new to Drive
+            // 2. Upload new to Drive FIRST (Safety Check)
             console.log(`Replacing video for movie ${id}...`);
-            newVideoPath = await uploadToDrive(videoFile.path, videoFile.originalname, videoFile.mimetype);
-            fs.unlinkSync(videoFile.path); // Cleanup
+            try {
+                newVideoPath = await uploadToDrive(videoFile.path, videoFile.originalname, videoFile.mimetype);
+                
+                // Only if upload succeeds, delete the old file
+                if (row.video_path && row.video_path.includes('drive.google.com')) {
+                    const oldFileId = row.video_path.match(/[-\w]{25,}/)?.[0];
+                    if (oldFileId) {
+                         console.log(`Deleting old video ${oldFileId}...`);
+                         await deleteFromDrive(oldFileId).catch(err => console.warn("Failed to delete old file (non-fatal):", err.message));
+                    }
+                }
+            } catch (err) {
+                 console.error("Update Upload Failed:", err);
+                 // Cleanup temp file since uploadToDrive might not have if it failed before entry
+                 if (fs.existsSync(videoFile.path)) fs.unlinkSync(videoFile.path);
+                 throw err; // Stop the update
+            }
         }
 
         // 3. Handle Poster Replacement
