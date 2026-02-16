@@ -125,9 +125,54 @@ const Hero = ({ movie }) => {
         }
 
         @media (max-width: 768px) {
-            .hero-title { font-size: 3rem; }
-            .hero-desc { font-size: 1rem; }
-            .hero-container { height: 70vh; }
+            .hero-container { 
+                height: auto; /* Let content dictate height */
+                min-height: 600px; /* Ensure immersive background */
+                margin-bottom: 0; /* Remove negative margin to prevent gap/overlap issues */
+                padding-bottom: 40px;
+            }
+
+            .hero-content {
+                align-items: flex-end; /* Push content to bottom */
+                padding-bottom: 0;
+            }
+
+            .content-wrapper {
+                width: 100%;
+                margin-top: 100px; /* Navbar offset */
+                padding-bottom: 20px;
+            }
+
+            .hero-title { 
+                font-size: 2.5rem; 
+                line-height: 1.1;
+            }
+
+            .hero-desc { 
+                font-size: 0.95rem; 
+                line-height: 1.5;
+                display: -webkit-box;
+                -webkit-line-clamp: 3;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+                margin-bottom: 24px;
+            }
+            
+            .hero-actions {
+                flex-direction: row; /* Keep side-by-side if they fit, or stack if needed. Netflix uses side-by-side usually. */
+                gap: 12px;
+            }
+            
+            .btn-primary, .btn-secondary {
+                flex: 1; /* Equal width buttons */
+                padding: 10px 16px;
+                font-size: 1rem;
+                justify-content: center;
+            }
+
+            .hero-backdrop img {
+                object-position: center top;
+            }
         }
       `}</style>
     </div>
