@@ -32,6 +32,18 @@ const initClient = async () => {
     const { client_secret, client_id, redirect_uris } = credentials.web;
     oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
 
+    // Auto-Save Refreshed Tokens (Attached immediately after initialization)
+    oAuth2Client.on('tokens', (tokens) => {
+        if (tokens.refresh_token) {
+            console.log("🔄 Drive Service: Received NEW Refresh Token. Saving...");
+        }
+        // Always save access_token
+        const tokenStr = JSON.stringify(tokens);
+        db.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2", ['drive_token', tokenStr])
+          .then(() => console.log("✅ Drive Service: Refreshed Token updated in DB."))
+          .catch(err => console.error("❌ Failed to save Refreshed Token:", err));
+    });
+
     // 2. Load Token from DB (Persistent)
     const { rows } = await db.query("SELECT value FROM settings WHERE key = $1", ['drive_token']);
     
@@ -56,21 +68,12 @@ const initClient = async () => {
     }
   } catch (err) {
       console.error("❌ Drive Service Init Error:", err.message);
+      // If credentials failed, valid logging helps debug on Render
+      if (err.message.includes('JSON')) {
+          console.error("💡 Check GOOGLE_CREDENTIALS env var format.");
+      }
   }
 };
-
-// Auto-Save Refreshed Tokens
-oAuth2Client.on('tokens', (tokens) => {
-    if (tokens.refresh_token) {
-        // store the refresh_token in your database
-        console.log("🔄 Drive Service: Received NEW Refresh Token. Saving...");
-    }
-    // Always save access_token
-    const tokenStr = JSON.stringify(tokens);
-    db.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2", ['drive_token', tokenStr])
-      .then(() => console.log("✅ Drive Service: Refreshed Token updated in DB."))
-      .catch(err => console.error("❌ Failed to save Refreshed Token:", err));
-});
 
 // Trigger initialization
 initClient();
